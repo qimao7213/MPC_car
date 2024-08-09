@@ -1,0 +1,34 @@
+{
+  "configurations": [
+    {
+      "browse": {
+        "databaseFilename": "${default}",
+        "limitSymbolsToIncludedHeaders": false
+      },
+      "includePath": [
+        "/home/bhrqhb/catkin_ws/src/ws_livox/devel/include/**",
+        "/opt/ros/noetic/include/**",
+        "/opt/ros/noetic/share/ORB_SLAM2/include/**",
+        "/opt/ros/noetic/share/grid_map_core/include/**",
+        "/opt/ros/noetic/share/grid_map_costmap_2d/include/**",
+        "/opt/ros/noetic/share/grid_map_cv/include/**",
+        "/opt/ros/noetic/share/grid_map_demos/include/**",
+        "/opt/ros/noetic/share/grid_map_filters/include/**",
+        "/opt/ros/noetic/share/grid_map_loader/include/**",
+        "/opt/ros/noetic/share/grid_map_octomap/include/**",
+        "/opt/ros/noetic/share/grid_map_pcl/include/**",
+        "/opt/ros/noetic/share/grid_map_ros/include/**",
+        "/opt/ros/noetic/share/grid_map_rviz_plugin/include/**",
+        "/opt/ros/noetic/share/grid_map_sdf/include/**",
+        "/opt/ros/noetic/share/grid_map_visualization/include/**",
+        "/usr/include/**"
+      ],
+      "name": "ROS",
+      "intelliSenseMode": "gcc-x64",
+      "compilerPath": "/usr/bin/gcc",
+      "cStandard": "gnu11",
+      "cppStandard": "c++14"
+    }
+  ],
+  "version": 4
+}

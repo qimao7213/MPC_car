@@ -364,6 +364,8 @@ void ArcSpline::setWayPoints(const std::vector<double>& x_waypoints,
   yt_.set_points(t_list, y_list);
   double res = 1e-2;
   sL_.resize(0);
+  xL_.resize(0);
+  yL_.resize(0);
   sL_.push_back(0);
   xL_.push_back(xt_(0));
   yL_.push_back(yt_(0));

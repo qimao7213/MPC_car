@@ -10,6 +10,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   nodelet
   car_msgs
+  tf
 )
 
 catkin_package(

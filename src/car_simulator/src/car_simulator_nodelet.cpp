@@ -6,6 +6,8 @@
 
 #include <Eigen/Core>
 #include <deque>
+#include <tf/transform_datatypes.h>
+#include <tf/transform_broadcaster.h>
 
 struct Car {
   double l;
@@ -52,6 +54,7 @@ class Nodelet : public nodelet::Nodelet {
   ros::Subscriber path_sub_;
   ros::Timer sim_timer_;
 
+  bool has_path_ = false;
   struct DelayedMsg {
     ros::Time t;
     double a, delta;
@@ -65,7 +68,32 @@ class Nodelet : public nodelet::Nodelet {
     // input_(0) = msg->a;
     // input_(1) = msg->delta;
   }
+
+  void path_callback(const nav_msgs::Path::ConstPtr& pathMsg)
+  {
+    has_path_ = true;
+    //更新初始状态？？路径的起点一定是初始的状态吗？
+    Eigen::Vector4d initS;
+    initS(0) = pathMsg->poses[0].pose.position.x;
+    initS(1) = pathMsg->poses[0].pose.position.y;
+    double q0 = pathMsg->poses[0].pose.orientation.w;
+    double q1 = pathMsg->poses[0].pose.orientation.x;
+    double q2 = pathMsg->poses[0].pose.orientation.y;
+    double q3 = pathMsg->poses[0].pose.orientation.z;
+    double yaw_deg = 1 * std::atan2(2*q1*q2 + 2*q0*q3, -2 * q2 * q2 -2 * q3 * q3 + 1);
+    // std::cout << "yaw is " << yaw_deg * 57.3 << std::endl;    
+    initS(2) = yaw_deg;
+
+    initS(3) = 0;//速度
+
+    //原程序
+    car.setInitialState(initS);
+    ROS_INFO("Car Simulator Init Success!!!!!");
+  }
+
   void timer_callback(const ros::TimerEvent& event) {
+    //原程序
+    if(has_path_ == false) return;
     if (!delayedMsgs_.empty()) {
       auto& msg = delayedMsgs_.front();
       //只有当当前时间减去msg.t（控制量产生的时间）大于延迟了，才说明该控制量可以起效果
@@ -75,8 +103,10 @@ class Nodelet : public nodelet::Nodelet {
         delayedMsgs_.pop_front();
       }
     }
-
+    // std::cout << "-----|输入：----|" << input_(0) << ", " << input_(1) << std::endl;
+    // std::cout << "-----|step前：----|" << car.state.transpose() << std::endl;
     car.step(input_, 1.0 / 400);
+    // std::cout << "-----|step后：----|" << car.state.transpose() << std::endl;
     //将car的状态作为Odometry数据发送出来可视化
     nav_msgs::Odometry odom_msg;
     odom_msg.header.stamp = ros::Time::now();
@@ -96,6 +126,25 @@ class Nodelet : public nodelet::Nodelet {
     odom_msg.twist.twist.linear.z = 0.0;
 
     odom_pub_.publish(odom_msg);
+
+    tf::Transform transform;
+    transform.setOrigin(tf::Vector3(car.state(0), car.state(1), 0));
+
+    static tf::TransformBroadcaster transform_broadcaster;
+    tf::Quaternion q;
+    q.setX(odom_msg.pose.pose.orientation.x);
+    q.setY(odom_msg.pose.pose.orientation.y);
+    q.setZ(odom_msg.pose.pose.orientation.z);
+    q.setW(odom_msg.pose.pose.orientation.w);
+    transform.setRotation(q);
+
+    transform_broadcaster.sendTransform(tf::StampedTransform(transform,
+                                                              ros::Time::now(), "world",
+                                                              "ground_link")
+    );
+
+
+
   }
 
  public:
@@ -111,9 +160,9 @@ class Nodelet : public nodelet::Nodelet {
     input_.setZero();
     car.setInitialState(initS);
 
-    odom_pub_ = nh.advertise<nav_msgs::Odometry>("odom", 1);
+    odom_pub_ = nh.advertise<nav_msgs::Odometry>("odom_car", 1);
     cmd_sub_ = nh.subscribe<car_msgs::CarCmd>("car_cmd", 1, &Nodelet::cmd_callback, this, ros::TransportHints().tcpNoDelay());
-    path_sub_ = nh.subscribe<nav_msgs::Path>("",1, &Nodelet::Path_callback);
+    path_sub_ = nh.subscribe<nav_msgs::Path>("/hybrid_a_star_zm0612/searched_path_smoothed_with_d",1, &Nodelet::path_callback, this, ros::TransportHints().tcpNoDelay());
     // 以400hz的频率一直在更新state。
     // 每次来的cmd都放到queue里面，如果queue里面有cmd则拿出来作为新的input使用，都则就还是用上一次的cmd更新state
     sim_timer_ = nh.createTimer(ros::Duration(1.0 / 400), &Nodelet::timer_callback, this);

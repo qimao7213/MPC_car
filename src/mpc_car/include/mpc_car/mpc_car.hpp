@@ -31,6 +31,8 @@ class MpcCar {
   double v_max_, a_max_, delta_max_, ddelta_max_;//bound约束
   double delay_;//延迟
 
+  bool path_direction_ = 1;//1表示前进
+
   arc_spline::ArcSpline s_;//参考轨迹
   double desired_v_;//期待的速度？预估的一个速度？？
 
@@ -114,6 +116,7 @@ class MpcCar {
 
   // 在轨迹s_上，求某一点(x, y)处的状态和输入(phi, v, delta)
   void calLinPoint(const double& s0, double& phi, double& v, double& delta) {
+    // std::cout << "所期望的x, y:" << s_(s0, 0) << std::endl;
     Eigen::Vector2d dxy = s_(s0, 1);
     Eigen::Vector2d ddxy = s_(s0, 2);
     double dx = dxy.x();
@@ -121,11 +124,25 @@ class MpcCar {
     double ddx = ddxy.x();
     double ddy = ddxy.y();
     double dphi = (ddy * dx - dy * ddx) / (dx * dx + dy * dy);//简化的曲率公式
-    phi = atan2(dy, dx);
-    v = desired_v_;//这个速度为什么不使用机器人odomtery发布的速度呢？难道是那个速度也是和desired_v一致的吗
-    // v = std::max (x0_observe_(3), desired_v_);
-    delta = atan2(ll_ * dphi / v , 1.0);// ERROR?这里不是应该再除以一个v吗？
-    // delta = atan2(ll_ * dphi , 1.0);// ERROR?这里不是应该再除以一个v吗？
+    if(path_direction_ == 1) phi = atan2(dy, dx);
+      else phi = atan2(dy, dx) - M_PI;//倒车
+    
+    if(s0 >= s_.arcL())
+    {
+      v = 0.0;
+      delta = 0.0;
+    }
+    else
+    {
+      v = desired_v_;//这个速度为什么不使用机器人odomtery发布的速度呢？难道是那个速度也是和desired_v一致的吗
+      // std::cout << v << std::endl;
+      // v = std::max (x0_observe_(3), desired_v_);
+      delta = atan2(ll_ * dphi / (v) , 1.0);// ERROR?这里不是应该再除以一个v吗？
+      // if(path_direction_ == 0) delta *= -1; //倒车
+      // delta = atan2(ll_ * dphi , 1.0);// ERROR?这里不是应该再除以一个v吗？
+    }
+
+
   }
 
   inline VectorX diff(const VectorX& state,
@@ -186,7 +203,7 @@ class MpcCar {
       linearization(phi, v, delta);
       x0_delay = Ad_ * x0_delay + Bd_ * historyInput_[i] + gd_;//这里要构造A
       compensateDelayX0_.push_back(x0_delay);
-      s0 += x0_delay[3] * dt_;
+      s0 += abs(x0_delay[3]) * dt_;
       s0 = s0 < s_.arcL() ? s0 : s_.arcL();
     }
     return x0_delay;
@@ -213,9 +230,9 @@ class MpcCar {
     nh.getParam("delay", delay_);
     history_length_ = std::ceil(delay_ / dt_);//向上取整
 
-    ref_pub_ = nh.advertise<nav_msgs::Path>("reference_path", 1);
-    traj_pub_ = nh.advertise<nav_msgs::Path>("traj", 1);
-    traj_delay_pub_ = nh.advertise<nav_msgs::Path>("traj_delay", 1);
+    ref_pub_ = nh.advertise<nav_msgs::Path>("path_ref", 1);
+    traj_pub_ = nh.advertise<nav_msgs::Path>("traj_mpc", 1);
+    traj_delay_pub_ = nh.advertise<nav_msgs::Path>("traj_mpc_delay", 1);
 
     // TODO: set initial value of Ad, Bd, gd
     Ad_.setIdentity();  // Ad for instance
@@ -300,6 +317,28 @@ class MpcCar {
     }
   }
 
+  bool check_goal(const VectorX& x0)
+  {
+    
+    Eigen::Vector2d dxy = s_(s_.arcL(), 1);
+    double phi = atan2(dxy.y(), dxy.x());
+    if(path_direction_ == 0) phi -= M_PI;
+    if (phi - x0(2) > M_PI) {
+      phi -= 2 * M_PI;
+    } else if (phi - x0(2) < -M_PI) {
+      phi += 2 * M_PI;
+    } 
+    
+    Eigen::Vector2d gxy = s_(s_.arcL(), 0);
+    double dx = gxy.x() - x0.x();
+    double dy = gxy.y() - x0.y();
+    std::cout << "dxy: " <<  (dx * dx + dy * dy) << ", v: " << std::abs(x0(3));
+    std::cout << ", std::abs(phi - x0(2)): " << std::abs(phi - x0(2)) << std::endl;
+    if((dx * dx + dy * dy) < 0.1 && std::abs(x0(3)) < 0.01 && std::abs(phi - x0(2)) < 0.05) return true;
+    // else if((dx * dx + dy * dy) < 0.01 && std::abs(x0(3)) < 0.001) return true;
+    return false;
+  }
+
   int solveQP(const VectorX& x0_observe) {
     x0_observe_ = x0_observe;
     historyInput_.pop_front();
@@ -307,7 +346,20 @@ class MpcCar {
     //这是XX的约束，由预测出来的delta，结合ddelta_max来确定delta的上下界？
     lu_.coeffRef(2, 0) = predictInput_.front()(1) - ddelta_max_ * dt_;
     uu_.coeffRef(2, 0) = predictInput_.front()(1) + ddelta_max_ * dt_;
-    VectorX x0 = compensateDelay2(x0_observe_);//当前状态。如果是由延迟的情况下，那么x0_observe_是存在延迟的状态
+    VectorX x0 = compensateDelay2(x0_observe_);//当前应该的状态。如果是由延迟的情况下，那么x0_observe_是存在延迟的状态
+    bool arrive_goal = check_goal(x0);
+    // std::cout << "arrive the goal ?? : " << arrive_goal << std::endl;
+    if(arrive_goal)
+    {
+      // for (int i = 0; i < N_; ++i) 
+      // {
+      //   predictInput_[i] = VectorU::Zero();
+      //   predictState_[i] = predictMat.col(i);
+      // }
+      std::cout << "------------!!!!到达seg的终点!!!!-----------" << std::endl;
+      std::cout << "到达终点时的状态为：" << x0.transpose() << std::endl;
+      return 11;//表示已经到达终点了
+    }
     // set BB, AA, gg
     Eigen::MatrixXd BB, AA, gg;
     BB.setZero(n * N_, m * N_);
@@ -382,9 +434,12 @@ class MpcCar {
       qx.coeffRef(n*i + 0, 0) = -Qx_.coeffRef(n * i + 0, n * i + 0) * xy(0);
       qx.coeffRef(n*i + 1, 0) = -Qx_.coeffRef(n * i + 1, n * i + 1) * xy(1);
       qx.coeffRef(n*i + 2, 0) = -Qx_.coeffRef(n * i + 2, n * i + 2) * phi;
-      qx.coeffRef(n*i + 3, 0) = -0;
-      s0 += desired_v_ * dt_;
+      qx.coeffRef(n*i + 3, 0) = -Qx_.coeffRef(n * i + 3, n * i + 3) * v;
+      // qx.coeffRef(n*i + 3, 0) = -0;//本来就是让期望的末速度为0了？？
+      s0 += std::abs(desired_v_) * dt_;
       s0 = s0 < s_.arcL() ? s0 : s_.arcL();
+      if(i == 0)
+        std::cout << "desired: " << xy.transpose() << ", " << phi << ", " << v << std::endl;
     }
     Eigen::SparseMatrix<double> BB_sparse = BB.sparseView();
     Eigen::SparseMatrix<double> AA_sparse = AA.sparseView();
@@ -526,6 +581,41 @@ class MpcCar {
       traj_delay_pub_.publish(msg);
     }
 
+  }
+
+  void setPath(const nav_msgs::Path::ConstPtr& pathMsg)
+  {
+    std::vector<double> track_points_x, track_points_y;
+    for(int i = 0; i < pathMsg->poses.size(); ++i)
+    {
+      track_points_x.push_back(pathMsg->poses[i].pose.position.x);
+      track_points_y.push_back(pathMsg->poses[i].pose.position.y);
+    }
+    s_.setWayPoints(track_points_x, track_points_y);
+    std::cout << "Set new path!!!" << std::endl;
+  }
+
+  void setPath(const std::vector<Eigen::Vector2d> &path_seg, int path_direction)
+  {
+    std::vector<double> track_points_x, track_points_y;
+    for(int i = 0; i < path_seg.size(); ++i)
+    {
+      track_points_x.push_back(path_seg[i](0));
+      track_points_y.push_back(path_seg[i](1));
+    }
+    s_.setWayPoints(track_points_x, track_points_y);
+
+    if(path_direction == 1)//向前
+    {
+      path_direction_ = 1;
+      desired_v_ = abs(desired_v_);
+    }
+    else//向后
+    {
+      path_direction_ = 0;
+      desired_v_ = -1 * abs(desired_v_);
+    }
+    std::cout << "Set new path seg!!! The desired_v is " << desired_v_ << std::endl;
   }
 };
 
